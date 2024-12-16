@@ -10,7 +10,7 @@ import numpy as np
 from torch.optim import SGD, Adam
 from torch.nn.utils import clip_grad_value_
 
-from dataset import TrajectoryLoader, GraphLoader
+from dataset import TrajectoryLoader
 from model import Model
 from params import Params
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc

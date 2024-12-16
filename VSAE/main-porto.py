@@ -10,7 +10,7 @@ import numpy as np
 from torch.optim import SGD, Adam
 from torch.nn.utils import clip_grad_value_
 
-from dataset import TrajectoryLoader
+from dataset import TrajectoryLoader, GraphLoader
 from model import Model
 from params import Params
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
@@ -48,9 +48,9 @@ class Trainer:
             train_dataloader.shuffle_dataloader()
             for i, data in enumerate(train_dataloader.src_data_batchs):
                 src, trg, src_lengths, trg_lengths = data.to(self.device), train_dataloader.trg_data_batchs[i].to(self.device), train_dataloader.src_length_batchs[i], train_dataloader.trg_length_batchs[i]
-                nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
+                nll_loss, kl_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
                 nll_loss = nll_loss.sum(dim=-1)
-                loss = nll_loss.mean()
+                loss = nll_loss.mean() + kl_loss.mean()
                 avg_loss += loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -66,7 +66,7 @@ class Trainer:
             for k,dataloader in valid_dataloader.items():
                 for i, data in enumerate(dataloader.src_data_batchs):
                     src, trg, src_lengths, trg_lengths = data.to(self.device), dataloader.trg_data_batchs[i].to(self.device), dataloader.src_length_batchs[i], dataloader.trg_length_batchs[i]
-                    nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
+                    nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
                     nll_loss = nll_loss.sum(dim=-1)
                     nll_loss = nll_loss.cpu().detach().numpy()
                     valid_prob[k] = np.concatenate((valid_prob[k], nll_loss))
@@ -88,6 +88,7 @@ class Trainer:
             if epoch-best_epoch>=5:
                 break
 
+
         with open("log.txt", 'a') as f:
             f.write(post + f', best epoch:{best_epoch}\n')
         
@@ -100,7 +101,7 @@ class Trainer:
 
         for i, data in enumerate(normal_dataloader.src_data_batchs):
             src, trg, src_lengths, trg_lengths = data.to(self.device), normal_dataloader.trg_data_batchs[i].to(self.device), normal_dataloader.src_length_batchs[i], normal_dataloader.trg_length_batchs[i]
-            nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
+            nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
             nll_loss = nll_loss.sum(dim=-1)
             nll_loss = nll_loss.cpu().detach().numpy()
             normal_prob = np.concatenate((normal_prob, nll_loss))
@@ -108,7 +109,7 @@ class Trainer:
         for k,dataloader in abnormal_dataloaders.items():
             for i, data in enumerate(dataloader.src_data_batchs):
                 src, trg, src_lengths, trg_lengths = data.to(self.device), dataloader.trg_data_batchs[i].to(self.device), dataloader.src_length_batchs[i], dataloader.trg_length_batchs[i]
-                nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
+                nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
                 nll_loss = nll_loss.sum(dim=-1)
                 nll_loss = nll_loss.cpu().detach().numpy()
                 abnormal_prob[k] = np.concatenate((abnormal_prob[k], nll_loss))
@@ -122,7 +123,7 @@ class Trainer:
             roc = roc_auc_score(label, score)
             pr_list.append(pr)
             print(f"{k}, ROC-AUC:{roc}, PR-AUC: {pr}")
-        print('AE', '|'.join(map(str, pr_list)))
+        print('VSAE', '|'.join(map(str, pr_list)))
 
     def save(self):
         if torch.cuda.device_count()>1 and len(self.cuda_devices)>1:
@@ -135,23 +136,21 @@ class Trainer:
             }
         torch.save(state, os.path.join(self.save_path))
 
+
 if __name__=="__main__":
-    root_path = "/home/liwenbin/extent/home/liwenbin/code/TrajectoryAnomalyDetection/datasets/xian-CausalTAD/grids"
+    root_path = "/home/liwenbin/extent/home/liwenbin/code/TrajectoryAnomalyDetection/datasets/porto/grids"
     batch_size = 128
     config = json.load(open(os.path.join(root_path, "config.json")))
 
-    trainer = Trainer(config, save_path='save/xian.pth', load_model=None)
-
+    trainer = Trainer(config, save_path='save/porto.pth', load_model=None)
     train_dataloader = TrajectoryLoader(os.path.join(root_path, "train-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
     valid_dataloader = {0: TrajectoryLoader(os.path.join(root_path, "valid-normal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False),
                         1: TrajectoryLoader(os.path.join(root_path, "valid-abnormal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)}
-    trainer.train(200, train_dataloader, valid_dataloader)
-
+    trainer.train(20, train_dataloader, valid_dataloader)
 
     alpha = [0.1, 0.2, 0.3]
     distance = [1, 2, 3]
-    trainer = Trainer(config, save_path=None, load_model='save/xian.pth')
-
+    trainer = Trainer(config, save_path=None, load_model='save/porto.pth')
     normal_dataloader = TrajectoryLoader(os.path.join(root_path, "test-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
     abnormal_dataloader = dict()
     for a in alpha:
