@@ -10,7 +10,7 @@ import numpy as np
 from torch.optim import SGD, Adam
 from torch.nn.utils import clip_grad_value_
 
-from dataset import TrajectoryLoader, GraphLoader
+from dataset import TrajectoryLoader
 from model import Model
 from params import Params
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
@@ -138,12 +138,13 @@ class Trainer:
 
 
 if __name__=="__main__":
-    root_path = "/home/liwenbin/extent/home/liwenbin/code/TrajectoryAnomalyDetection/datasets/porto/grids"
+    root_path = "../datasets/porto"
     batch_size = 128
     config = json.load(open(os.path.join(root_path, "config.json")))
 
     trainer = Trainer(config, save_path='save/porto.pth', load_model=None)
     train_dataloader = TrajectoryLoader(os.path.join(root_path, "train-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
+    # valid_dataloader is a dict: {0: dataloader for normal trajectories, 1: dataloader for abnormal trajectories}
     valid_dataloader = {0: TrajectoryLoader(os.path.join(root_path, "valid-normal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False),
                         1: TrajectoryLoader(os.path.join(root_path, "valid-abnormal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)}
     trainer.train(20, train_dataloader, valid_dataloader)
