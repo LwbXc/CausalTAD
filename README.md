@@ -14,7 +14,7 @@ python main-xian.py
 The usage of SAE, VSAE and GM-VSAE is similar.
 
 # Acknowledgements
-The implementation of GM-VSAE is based on the code from [this repository](https://github.com/chwang0721/GM-VSAE), I simplified the code for pretraining and the optimizing Gaussian Mixture Model to make the logic for model optimization more straightforward, and I modified the code of model inference.
+The implementation of GM-VSAE is based on the code from [this repository](https://github.com/chwang0721/GM-VSAE), I simplified the code for pretraining and training Gaussian Mixture Model to make the logic of model optimization more straightforward, and I modified the code of model inference based on my own understanding.
 
 # Citation
 Please cite our paper if our paper or codes is helpful.
