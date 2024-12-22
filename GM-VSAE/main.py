@@ -26,7 +26,7 @@ class Trainer:
         self.params = Params()
         self.label_num = self.config['grid_size'][0]*self.config['grid_size'][1] + 3
 
-        self.model = Model(self.label_num, self.params.hidden_size, self.params.hidden_size, self.params.layer_num, self.params.latent_num, self.params.dropout)
+        self.model = Model(self.label_num, self.params.hidden_size, self.params.layer_num)
         self.cross_entropy_loss = nn.CrossEntropyLoss(ignore_index=self.label_num-1)
         if torch.cuda.device_count()>1 and len(cuda_devices)>1:
             self.model = nn.DataParallel(self.model, device_ids=cuda_devices)
@@ -34,9 +34,9 @@ class Trainer:
         if load_model!=None:
             checkpoint = torch.load(os.path.join(self.load_model))
             self.model.load_state_dict(checkpoint['model'])
-
-        self.optimizer = Adam([{"params":self.model.parameters(
-                ), 'lr':self.params.lr}], weight_decay=self.params.weight_decay)
+        
+        self.optimizer1 = Adam([p for p in self.model.parameters() if (p is not self.model.model.pi_prior) and (p is not self.model.model.mu_prior) and (p is not self.model.model.log_var_prior)], lr=self.params.lr, weight_decay=self.params.weight_decay)
+        self.optimizer2 = Adam([self.model.model.pi_prior, self.model.model.mu_prior, self.model.model.log_var_prior], lr=self.params.lr, weight_decay=self.params.weight_decay)
 
     def train(self, epochs: int, train_dataloader: TrajectoryLoader, valid_dataloader: dict):
         
@@ -48,16 +48,25 @@ class Trainer:
             train_dataloader.shuffle_dataloader()
             for i, data in enumerate(train_dataloader.src_data_batchs):
                 src, trg, src_lengths, trg_lengths = data.to(self.device), train_dataloader.trg_data_batchs[i].to(self.device), train_dataloader.src_length_batchs[i], train_dataloader.trg_length_batchs[i]
-                nll_loss, kl_loss = self.model.forward(src, trg, src_lengths, trg_lengths)
-                nll_loss = nll_loss.sum(dim=-1)
-                loss = nll_loss.mean() + kl_loss.mean()
+                loss = self.model.forward(src, trg, src_lengths, trg_lengths, train=True)
                 avg_loss += loss.item()
-                self.optimizer.zero_grad()
+                self.optimizer1.zero_grad()
                 loss.backward()
-                self.optimizer.step()
+                self.optimizer1.step()
 
                 post = "Train epoch:{}, iter:{}, avgloss:{:.4f}, loss:{:.4f}".format(epoch, i, avg_loss/(i+1), loss.item())
+                if i%10==0:
+                    print(post)
 
+            for i, data in enumerate(train_dataloader.src_data_batchs):
+                src, trg, src_lengths, trg_lengths = data.to(self.device), train_dataloader.trg_data_batchs[i].to(self.device), train_dataloader.src_length_batchs[i], train_dataloader.trg_length_batchs[i]
+                loss = self.model.forward(src, trg, src_lengths, trg_lengths, train=True)
+                avg_loss += loss.item()
+                self.optimizer2.zero_grad()
+                loss.backward()
+                self.optimizer2.step()
+
+                post = "Train epoch:{}, iter:{}, avgloss:{:.4f}, loss:{:.4f}".format(epoch, i, avg_loss/(i+1), loss.item())
                 if i%10==0:
                     print(post)
 
@@ -66,8 +75,7 @@ class Trainer:
             for k,dataloader in valid_dataloader.items():
                 for i, data in enumerate(dataloader.src_data_batchs):
                     src, trg, src_lengths, trg_lengths = data.to(self.device), dataloader.trg_data_batchs[i].to(self.device), dataloader.src_length_batchs[i], dataloader.trg_length_batchs[i]
-                    nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
-                    nll_loss = nll_loss.sum(dim=-1)
+                    nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths, train=False)
                     nll_loss = nll_loss.cpu().detach().numpy()
                     valid_prob[k] = np.concatenate((valid_prob[k], nll_loss))
             
@@ -101,16 +109,14 @@ class Trainer:
 
         for i, data in enumerate(normal_dataloader.src_data_batchs):
             src, trg, src_lengths, trg_lengths = data.to(self.device), normal_dataloader.trg_data_batchs[i].to(self.device), normal_dataloader.src_length_batchs[i], normal_dataloader.trg_length_batchs[i]
-            nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
-            nll_loss = nll_loss.sum(dim=-1)
+            nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths, train=False)
             nll_loss = nll_loss.cpu().detach().numpy()
             normal_prob = np.concatenate((normal_prob, nll_loss))
 
         for k,dataloader in abnormal_dataloaders.items():
             for i, data in enumerate(dataloader.src_data_batchs):
                 src, trg, src_lengths, trg_lengths = data.to(self.device), dataloader.trg_data_batchs[i].to(self.device), dataloader.src_length_batchs[i], dataloader.trg_length_batchs[i]
-                nll_loss, _ = self.model.forward(src, trg, src_lengths, trg_lengths)
-                nll_loss = nll_loss.sum(dim=-1)
+                nll_loss = self.model.forward(src, trg, src_lengths, trg_lengths, train=False)
                 nll_loss = nll_loss.cpu().detach().numpy()
                 abnormal_prob[k] = np.concatenate((abnormal_prob[k], nll_loss))
         
@@ -121,10 +127,13 @@ class Trainer:
             pre, rec, _t = precision_recall_curve(label, score)
             pr = auc(rec, pre)
             roc = roc_auc_score(label, score)
-            pr_list.append(pr)
+            pr_list.append(round(pr, 4))
             print(f"{k}, ROC-AUC:{roc}, PR-AUC: {pr}")
-        print('VSAE', '|'.join(map(str, pr_list)))
-
+       
+        post = 'GM-VSAE ' + '|'.join(map(str, pr_list))
+        print(post)
+        with open("log.txt", 'a') as f:
+            f.write(post + '\n')
 
     def save(self):
         if torch.cuda.device_count()>1 and len(self.cuda_devices)>1:
@@ -137,25 +146,27 @@ class Trainer:
             }
         torch.save(state, os.path.join(self.save_path))
 
-
 if __name__=="__main__":
-    root_path = "../datasets/xian"
+    city = "xian"
+    root_path = f"../datasets/{city}"
     batch_size = 128
     config = json.load(open(os.path.join(root_path, "config.json")))
+    if not os.path.exists("./save"):
+        os.mkdir('./save')
 
-    trainer = Trainer(config, save_path='save/xian.pth', load_model=None)
-    train_dataloader = TrajectoryLoader(os.path.join(root_path, "train-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
-    # valid_dataloader is a dict: {0: dataloader for normal trajectories, 1: dataloader for abnormal trajectories}
-    valid_dataloader = {0: TrajectoryLoader(os.path.join(root_path, "valid-normal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False),
-                        1: TrajectoryLoader(os.path.join(root_path, "valid-abnormal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)}
-    trainer.train(20, train_dataloader, valid_dataloader)
+    for i in range(5):
+        trainer = Trainer(config, save_path=f'save/{city}.pth', load_model=None)
+        train_dataloader = TrajectoryLoader(os.path.join(root_path, "train-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
+        valid_dataloader = {0: TrajectoryLoader(os.path.join(root_path, "valid-normal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False),
+                            1: TrajectoryLoader(os.path.join(root_path, "valid-abnormal-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)}
+        trainer.train(200, train_dataloader, valid_dataloader)
 
-    alpha = [0.1, 0.2, 0.3]
-    distance = [1, 2, 3]
-    trainer = Trainer(config, save_path=None, load_model='save/xian.pth')
-    normal_dataloader = TrajectoryLoader(os.path.join(root_path, "test-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
-    abnormal_dataloader = dict()
-    for a in alpha:
-        for d in distance:
-            abnormal_dataloader[f"alpha_{a}_distance_{d}"] = TrajectoryLoader(os.path.join(root_path, f"alpha_{a}_distance_{d}.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
-    trainer.test(normal_dataloader, abnormal_dataloader)
+        alpha = [0.1, 0.2, 0.3]
+        distance = [1, 2, 3]
+        trainer = Trainer(config, save_path=None, load_model=f'save/{city}.pth')
+        normal_dataloader = TrajectoryLoader(os.path.join(root_path, "test-grid.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
+        abnormal_dataloader = dict()
+        for a in alpha:
+            for d in distance:
+                abnormal_dataloader[f"alpha_{a}_distance_{d}"] = TrajectoryLoader(os.path.join(root_path, f"alpha_{a}_distance_{d}.pkl"), batch_size, label_num=config['grid_size'][0]*config['grid_size'][1]+3, valid=False)
+        trainer.test(normal_dataloader, abnormal_dataloader)

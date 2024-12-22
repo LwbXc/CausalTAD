@@ -4,7 +4,7 @@ class Params:
         self.batch_size = 128
         self.dropout = 0.1
         self.hidden_size = 128
-        self.layer_num = 1
+        self.layer_num = 2
         self.latent_num = 128
 
         self.lr = 1e-3
